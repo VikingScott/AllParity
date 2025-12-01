@@ -1,0 +1,28 @@
+Global_Asset_System/
+├── config/                 # 配置文件 (Universe, Bundles)
+├── data/
+│   ├── raw/                # 原始数据 (Yahoo, FRED)
+│   ├── processed/          # 清洗后的矩阵 (Prices, Returns)
+│   └── features/           # [核心升级] 预计算的因子库
+│       ├── regime_signals/ # 存 MS-GARCH 的计算结果
+│       └── trend_signals/  # 存 LLMA 的计算结果
+├── src/
+│   ├── core/               # [核心升级] 基础类库
+│   │   ├── data.py         # 数据加载器封装
+│   │   └── math_utils.py   # 通用数学函数
+│   ├── data_loader/        # 下载与更新 (现有)
+│   ├── features/           # [核心升级] 复杂的数学计算逻辑
+│   │   ├── volatility.py   # GARCH, ATR 模型
+│   │   └── trend.py        # LLMA, MA 模型
+│   ├── strategy/           # [核心升级] 策略逻辑 (只做决策，不负责算数学)
+│   │   ├── base.py         # 策略基类
+│   │   └── garch_trend.py  # 你的混合策略
+│   ├── backtester/         # [核心升级] 事件驱动回测引擎
+│   │   ├── engine.py       # 撮合交易，记录流水
+│   │   └── portfolio.py    # 管理持仓，计算 PnL
+│   └── analysis/           # 绩效分析 (Sharpe, Drawdown)
+├── scripts/                # 运行脚本
+│   ├── update_data.py      # 日常更新数据
+│   ├── build_features.py   # [新增] 专门跑 GARCH 等耗时任务
+│   └── run_research.py     # 跑策略研究
+└── requirements.txt
