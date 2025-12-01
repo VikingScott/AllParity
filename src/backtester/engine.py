@@ -1,194 +1,112 @@
-"""
-================================================================================
-📜 DESIGN REQUIREMENTS: BACKTEST ENGINE
-================================================================================
-1. [Core Responsibility] Event-Driven Simulation:
-   - Iterate through time (daily loop).
-   - Fetch strategy signals -> Calculate PnL -> Update Portfolio -> Log Results.
-
-2. [Data Integrity]:
-   - Must handle NaN/Missing data gracefully (using .fillna(0.0) before operations).
-   - Ensure alignment between Strategy signals and Market returns.
-
-3. [Realism & Friction]:
-   - Implement Weight Drift: Weights change daily due to asset price movement.
-   - Implement Transaction Costs: Apply cost to Turnover based on Config.
-   - Support flexible Rebalancing Logic (Time-based vs. Drift-based).
-
-4. [Benchmark]:
-   - Provide a built-in 60/40 benchmark calculation for easy comparison.
-================================================================================
-"""
-
 import pandas as pd
 import numpy as np
-from src.core.data import DataLoader
 from src.backtester.config import BacktestConfig
 
 class BacktestEngine:
-    def __init__(self, start_date, end_date):
-        # Engine 只负责管时间和数据，不管手续费
-        self.returns = DataLoader.load_returns()
-        try:
-            self.returns = self.returns.loc[start_date:end_date]
-        except KeyError:
-            print(f"❌ Date range {start_date} to {end_date} not in data!")
-            self.returns = pd.DataFrame()
-            
-        self.dates = self.returns.index
-        
-    def _is_rebalance_day(self, date_idx, freq, current_weights, target_weights):
+    def __init__(self, returns_df):
         """
-        判断今天是否是调仓日
-        :param current_weights: 当前持仓 (漂移后)
-        :param target_weights: 策略想要的目标持仓
+        :param returns_df: 全市场收益率矩阵 (Date x Ticker)，必须已清洗对齐
         """
-        # 1. 基础模式
-        if freq == '1D': return True
-        if freq == 'Signal': return True 
+        self.returns = returns_df
+        self.dates = returns_df.index
+
+    def _is_rebalance_day(self, date_idx, freq, current_w, target_w):
+        """判断是否需要调仓"""
+        if freq == '1D' or freq == 'Signal': return True
         
-        # 2. 漂移模式 (Drift-based)
+        # Drift 模式
         if freq.startswith('Drift_'):
-            try:
-                threshold = float(freq.split('_')[1]) # e.g. "Drift_0.05" -> 0.05
-            except:
-                return True # 解析失败默认调仓
+            try: threshold = float(freq.split('_')[1])
+            except: return True
+            if current_w.empty or target_w.empty: return True
             
-            # 如果当前是空仓，或者目标变了，肯定要调
-            if current_weights.empty or target_weights.empty:
-                return True
-                
-            # 计算最大偏差
-            # 对齐索引
-            all_assets = current_weights.index.union(target_weights.index)
-            w_curr = current_weights.reindex(all_assets).fillna(0.0)
-            w_tgt = target_weights.reindex(all_assets).fillna(0.0)
-            
-            max_deviation = np.abs(w_curr - w_tgt).max()
-            
-            # 只有当偏差超过阈值时才调仓
-            return max_deviation > threshold
+            # 对齐并计算偏差
+            idx = current_w.index.union(target_w.index)
+            w_c = current_w.reindex(idx).fillna(0.0)
+            w_t = target_w.reindex(idx).fillna(0.0)
+            return np.abs(w_c - w_t).max() > threshold
 
-        # 3. 时间模式 (Time-based)
-        current_date = self.dates[date_idx]
+        # Time 模式
+        if date_idx + 1 >= len(self.dates): return True
+        curr_dt = self.dates[date_idx]
+        next_dt = self.dates[date_idx + 1]
         
-        # 检查是不是最后一天
-        if date_idx + 1 >= len(self.dates):
-            return True
-            
-        next_date = self.dates[date_idx + 1]
+        if freq == '1W': return curr_dt.week != next_dt.week
+        if freq == '1M': return curr_dt.month != next_dt.month
+        if freq == '3M': return curr_dt.quarter != next_dt.quarter
+        if freq == '12M': return curr_dt.year != next_dt.year
         
-        if freq == '1W':  return current_date.week != next_date.week
-        if freq == '1M':  return current_date.month != next_date.month
-        if freq == '3M':  return current_date.quarter != next_date.quarter
-        if freq == '6M':  return (current_date.month % 6) != (next_date.month % 6)
-        if freq == '12M': return current_date.year != next_date.year
-        if freq == '18M': 
-            # 简单算法：每 1.5 年
-            # 这里简化处理：每 18 个月大概是 540 天，或者用 month count
-            # 这种非标准频率很难精确对齐日历，建议用 12M 代替
-            return current_date.year != next_date.year
-
         return True
 
-    def run_strategy(self, strategy_instance, name="Strategy", config=None):
+    def run(self, strategy, config=None):
         """
-        运行策略
-        :param config: 专属于这个策略的 BacktestConfig (手续费、频率)
+        执行回测
+        :return: (daily_returns_series, daily_positions_df)
         """
-        # 如果没传配置，就用默认的无摩擦配置
-        cfg = config if config else BacktestConfig(transaction_cost=0.0, rebalance_freq='1D')
-        
-        print(f"⚙️ Running: {name:<15} | Cost: {cfg.transaction_cost*10000:>3.0f} bps | Freq: {cfg.rebalance_freq}")
+        cfg = config if config else BacktestConfig()
         
         capital = 1.0
         daily_rets = []
+        positions_history = []
         
-        # 记录当前的实际持仓权重 (初始为空)
+        # 初始状态
         current_weights = pd.Series(dtype=float)
-        
-        # 记录上一次的策略目标 (用于 Signal 模式对比)
-        last_strategy_weights = pd.Series(dtype=float)
+        last_target_weights = pd.Series(dtype=float)
 
         for i, date in enumerate(self.dates):
-            
-            # --- Step A: 询问策略今天的意图 ---
-            # (这是理想目标，不代表一定要执行)
+            # 1. 询问策略目标
             try:
-                raw_w = strategy_instance.get_weights(date)
-                strategy_target = pd.Series(raw_w)
-            except Exception:
-                strategy_target = pd.Series(dtype=float)
+                raw_w = strategy.get_weights(date)
+                target_w = pd.Series(raw_w)
+            except:
+                target_w = pd.Series(dtype=float)
 
-            # --- Step B: 判断是否执行调仓 ---
-            # 传入当前持仓(current)和策略意图(target)来判断是否触发阈值
-            do_rebalance = self._is_rebalance_day(i, cfg.rebalance_freq, current_weights, strategy_target)
+            # 2. 判断调仓
+            do_rebal = self._is_rebalance_day(i, cfg.rebalance_freq, current_weights, target_w)
             
-            # 特殊逻辑修正：Signal 模式
+            # Signal 模式优化
             if cfg.rebalance_freq == 'Signal':
-                # 只有当策略意图发生实质变化时，才视为 "Signal Change"
-                # 否则保持 current_weights (让其漂移)
-                if strategy_target.equals(last_strategy_weights):
-                    do_rebalance = False
+                if target_w.equals(last_target_weights):
+                    do_rebal = False
                 else:
-                    do_rebalance = True
-                    last_strategy_weights = strategy_target.copy()
+                    do_rebal = True
+                    last_target_weights = target_w.copy()
 
-            # --- Step C: 确定最终目标权重 ---
-            if do_rebalance:
-                final_target_weights = strategy_target
-            else:
-                # 不调仓 = 目标就是当前实际持仓 (Hold Drift)
-                final_target_weights = current_weights
+            final_w = target_w if do_rebal else current_weights
 
-            # --- Step D: 计算交易成本 ---
-            all_assets = current_weights.index.union(final_target_weights.index)
-            w_curr = current_weights.reindex(all_assets).fillna(0.0).astype(float)
-            w_tgt = final_target_weights.reindex(all_assets).fillna(0.0).astype(float)
+            # 3. 计算交易成本
+            # 对齐权重
+            assets = current_weights.index.union(final_w.index)
+            w_curr = current_weights.reindex(assets).fillna(0.0)
+            w_tgt = final_w.reindex(assets).fillna(0.0)
             
             turnover = np.abs(w_tgt - w_curr).sum()
             cost = turnover * cfg.transaction_cost
-            
-            # --- Step E: 计算收益 ---
+
+            # 4. 计算收益
+            gross_ret = 0.0
             if not w_tgt.empty:
-                # [关键修复] fillna(0.0) 防止 NaN 传染
-                today_rets = self.returns.loc[date].reindex(w_tgt.index).fillna(0.0)
-                gross_ret = today_rets.dot(w_tgt)
-            else:
-                gross_ret = 0.0
-                
-            net_ret = gross_ret - cost
+                # 获取当日资产收益 (填0防止炸裂)
+                day_asset_rets = self.returns.loc[date].reindex(w_tgt.index).fillna(0.0)
+                gross_ret = day_asset_rets.dot(w_tgt)
             
-            capital = capital * (1 + net_ret)
+            net_ret = gross_ret - cost
             daily_rets.append(net_ret)
             
-            # --- Step F: 计算次日漂移权重 ---
+            # 5. 记录持仓 (记录的是当日收盘后的名义权重，即漂移前的目标权重)
+            # 也可以记录漂移后的，看你分析需求。通常记录 Target 更直观。
+            positions_history.append(w_tgt.to_dict())
+
+            # 6. 计算漂移 (为明天做准备)
             if not w_tgt.empty:
-                # 价格变动导致权重变化
-                drifted = w_tgt * (1 + (today_rets if 'today_rets' in locals() else 0))
+                drifted = w_tgt * (1 + (day_asset_rets if 'day_asset_rets' in locals() else 0))
                 sum_w = drifted.sum()
-                if sum_w != 0:
-                    current_weights = drifted / sum_w
-                else:
-                    current_weights = pd.Series(dtype=float)
+                current_weights = drifted / sum_w if sum_w != 0 else pd.Series(dtype=float)
             else:
                 current_weights = pd.Series(dtype=float)
-            
-        return pd.Series(daily_rets, index=self.dates, name=name)
 
-    def run_benchmark_6040(self):
-        """
-        Standard 60/40 Benchmark (Frictionless, Daily Rebalance)
-        """
-        print("⚖️ Constructing Benchmark...")
-        stock = 'SPY'
-        bond = 'AGG' if 'AGG' in self.returns.columns else 'IEF'
+        # 结果打包
+        ret_series = pd.Series(daily_rets, index=self.dates)
+        pos_df = pd.DataFrame(positions_history, index=self.dates).fillna(0.0)
         
-        if stock not in self.returns.columns:
-            return pd.Series(dtype=float)
-            
-        weights = pd.Series({stock: 0.6, bond: 0.4})
-        
-        # [关键修复] 提取子集后先填 0，再做矩阵乘法
-        subset = self.returns[weights.index].fillna(0.0)
-        return subset.dot(weights).rename("Benchmark")
+        return ret_series, pos_df
