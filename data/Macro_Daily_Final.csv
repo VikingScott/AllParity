@@ -1,4 +1,4 @@
-Date,Macro_Growth,Macro_Inflation_Core,Macro_Inflation_Head,Signal_YieldCurve,Signal_Risk,Signal_VIX
+Date,Macro_Growth,Macro_Inflation_Core,Macro_Inflation_Head,Signal_T10Y2Y,Signal_Corp_OAS,Signal_VIX
 1996-12-31,2.3,2.7,3.3,0.55,0.6,20.92
 1997-01-01,2.3,2.7,3.3,0.55,0.6,20.92
 1997-01-02,2.3,2.7,3.3,0.57,0.6,21.14
