@@ -8,7 +8,7 @@ AllParity Strategy - Risk Parity & Trend Filter Configuration
 # ===========================
 # 1. 策略超参数 (Hyperparameters)
 # ===========================
-VOL_WINDOW = 60       # 计算波动率的窗口 (日)
+VOL_WINDOW = 120       # 计算波动率的窗口 (日)
 TREND_WINDOW = 200    # 趋势过滤的均线窗口 (日)
 
 # ===========================
@@ -57,7 +57,7 @@ BUDGETS_REGIME_2 = {
     'EEM': 1.0,
     'DBC': 3.0, # 给商品高风险预算
     'TIP': 2.0, # 给抗通胀债高风险预算
-    'GLD': 1.0,
+    'GLD': 0.5,
     'IWM': 1.0,
     # --- Zero Budget ---
     'TLT': 0.0, 'IEF': 0.0, 'LQD': 0.0, 'EFA': 0.0
@@ -68,11 +68,11 @@ BUDGETS_REGIME_2 = {
 BUDGETS_REGIME_3 = {
     'SGOV': 0.20, # 强制保留 20% 现金应对波动
     # --- Risk Budgets (剩余 80% 仓位内部的分配) ---
-    'GLD': 4.0, # 黄金是主力
-    'DBC': 2.0,
+    'GLD': 6.0, # 黄金是主力
+    'DBC': 4.0,
     'TIP': 3.0,
-    'IEF': 1.0,
-    'LQD': 1.0,
+    'IEF': 0.0,
+    'LQD': 0.0,
     # --- Zero Budget ---
     'SPY': 0.0, 'EFA': 0.0, 'EEM': 0.0, 'IWM': 0.0, 'TLT': 0.0
 }
@@ -82,10 +82,10 @@ BUDGETS_REGIME_3 = {
 BUDGETS_REGIME_4_MACRO = {
     'SGOV': 0.0,
     # --- Risk Budgets ---
-    'TLT': 5.0, # 风险全给长债
-    'IEF': 3.0,
+    'TLT': 8.0, # 风险全给长债
+    'IEF': 2.0,
     'GLD': 1.0, # 少量对冲货币贬值
-    'LQD': 1.0,
+    'LQD':0.0,
     # --- Zero Budget ---
     'SPY': 0.0, 'EFA': 0.0, 'EEM': 0.0, 'IWM': 0.0, 'DBC': 0.0, 'TIP': 0.0
 }

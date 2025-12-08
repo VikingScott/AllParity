@@ -99,7 +99,7 @@ LEVERAGE_FLOOR = 0.0
 # 这里先给 A)
 
 USE_FIXED_FINANCING_RATE = True
-FINANCING_RATE_ANN = 0.08  # 8% 年化，先保守设个常数
+FINANCING_RATE_ANN = 0.00  # 8% 年化，先保守设个常数
 
 # 如果未来你要切换成数据序列（比如用 FRED TB3MS / DGS3MO），
 # 在 allocation/engine 中读取这个开关即可：
