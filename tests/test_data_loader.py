@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from data_loader import align_datasets
+from src.data_loader import align_datasets
 
 def test_alignment_logic_pure():
     """

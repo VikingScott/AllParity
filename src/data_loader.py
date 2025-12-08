@@ -51,22 +51,29 @@ def load_raw_datasets(data_dir: Path = DEFAULT_DATA_DIR) -> Tuple[pd.DataFrame, 
 
 def align_datasets(asset_df: pd.DataFrame, macro_df: pd.DataFrame) -> pd.DataFrame:
     """
-    核心对齐逻辑 (纯函数)
-    输入：两个 DataFrame
-    输出：一个合并后的 DataFrame
-    逻辑：以 asset_df 为主键，对 macro_df 进行前值填充 (Forward Fill)
+    核心对齐逻辑 (纯函数) - 修正版
     """
-    # 1. 宏观数据 Reindex (防 Look-ahead bias 的核心)
-    # 任何非交易日的宏观发布，都会被 'ffill' 到下一个交易日
+    # 1. 宏观数据 Reindex
     macro_aligned = macro_df.reindex(asset_df.index, method='ffill')
     
     # 2. 合并
     aligned_df = pd.concat([asset_df, macro_aligned], axis=1)
     
-    # 3. 清洗早期缺失值 (不可变性：不修改原 df，返回新的)
-    clean_df = aligned_df.dropna()
+    # 3. 智能清洗 (Smart Drop)
+    # A. 必须清洗掉：宏观数据缺失的日子
+    # 如果没有宏观数据，我们无法判断象限，这部分必须扔掉
+    macro_cols = macro_df.columns
+    aligned_df = aligned_df.dropna(subset=macro_cols)
     
-    return clean_df
+    # B. 必须清洗掉：所有资产都缺失的日子 (比如节假日，虽然 asset_df 索引应该保证了这点)
+    asset_cols = asset_df.columns
+    aligned_df = aligned_df.dropna(subset=asset_cols, how='all')
+    
+    # 注意：我们不再对 asset_cols 使用 dropna(how='any')
+    # 此时 aligned_df 里，1990年的行，SPY有值，但 GLD 可能是 NaN。
+    # 这完全没问题！我们的策略层会处理这个 NaN (即不分配权重)。
+    
+    return aligned_df
 
 if __name__ == "__main__":
     # DOP 风格的调用链：像管道一样清晰
