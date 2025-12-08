@@ -1,10 +1,8 @@
 # tests/test_regime_sanity.py
-
 import pytest
 import pandas as pd
 from src.data_loader import get_merged_market_state
 from src.macro_regime_signal_generator import run_signal_pipeline
-from src.config_regime import REGIME_CODE_MAP
 
 # 反向映射以便打印出人能看懂的文字 (例如 4 -> "Deflation")
 REGIME_NAME_MAP = {v: k for k, v in {
@@ -31,13 +29,18 @@ def signal_df():
 def print_scenario_report(date_str, row):
     """辅助函数：打印漂亮的诊断报告"""
     regime_code = row['Regime']
-    regime_name = [k for k, v in REGIME_NAME_MAP.items() if v == regime_code][0] if regime_code in REGIME_NAME_MAP.values() else str(regime_code)
+    # ... name map logic ...
+    
+    # NOW: Directly access the column names provided by input CSV
+    # Because we added the `.join` in run_signal_pipeline, these will exist!
+    vix = row.get('Signal_Vol_VIX', 'N/A')
+    risk = row.get('Signal_Risk_DBAA_Minus_DGS10', 'N/A')
     
     print(f"\n[{date_str}] Scenario Report:")
-    print(f"  > Macro State: Growth_Trend={row['Trend_Growth']:.2f}, Inflation_Trend={row['Trend_Inflation_Blended']:.2f}")
-    print(f"  > Market Veto: Score={row['Market_Stress_Score']} (VIX={row.get('Signal_VIX', 'N/A')}, Risk={row.get('Signal_Risk', 'N/A')})")
+    print(f"  > Macro State: Growth={row['Trend_Growth']:.2f}, Inflation={row['Trend_Inflation_Blended']:.2f}")
+    print(f"  > Market Veto: Score={row['Market_Stress_Score']} (VIX={vix}, Risk={risk})")
     print(f"  > Signal Logic: Adj_Growth={row['Growth_Signal_Adj']}")
-    print(f"  > FINAL REGIME: {regime_name} (Code {regime_code})")
+    print(f"  > FINAL REGIME: {regime_code}")
     print("-" * 60)
 
 def test_scenario_2008_gfc(signal_df):

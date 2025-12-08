@@ -9,55 +9,64 @@ from src.config_regime import (
     THRESHOLD_CREDIT_STRESS, 
     THRESHOLD_CURVE_INVERT,
     REGIME_CODE_MAP,
-    COLUMN_MAP,
-    THRESHOLD_INFLATION_STICKY, # New
-    THRESHOLD_MARKET_PANIC      # New
+    # COLUMN_MAP, # 已移除：不再需要映射，直接使用原始列名
+    THRESHOLD_INFLATION_STICKY,
+    THRESHOLD_MARKET_PANIC
 )
 
 def calculate_macro_trends(df: pd.DataFrame) -> pd.DataFrame:
     """
     第一步：计算宏观基础趋势，并保留绝对水平
+    直接使用 CSV 中的原始列名
     """
     signals = pd.DataFrame(index=df.index)
     
-    col_growth = COLUMN_MAP['growth']
-    col_inf_core = COLUMN_MAP['inflation_core']
-    col_inf_head = COLUMN_MAP['inflation_head']
-
-    # 1. 增长趋势
-    growth_ma = df[col_growth].rolling(window=MACRO_TREND_WINDOW).mean()
-    signals['Trend_Growth'] = df[col_growth] - growth_ma
+    # 直接使用原始数据列名 'Macro_Growth'
+    # 确保你的 CSV 输入列名是准确的
+    if 'Macro_Growth' in df.columns:
+        growth_ma = df['Macro_Growth'].rolling(window=MACRO_TREND_WINDOW).mean()
+        signals['Trend_Growth'] = df['Macro_Growth'] - growth_ma
     
     # 2. 通胀趋势
-    inf_core_ma = df[col_inf_core].rolling(window=MACRO_TREND_WINDOW).mean()
-    inf_head_ma = df[col_inf_head].rolling(window=MACRO_TREND_WINDOW).mean()
-    
-    trend_core = df[col_inf_core] - inf_core_ma
-    trend_head = df[col_inf_head] - inf_head_ma
-    
-    signals['Trend_Inflation_Blended'] = (
-        trend_core * INFLATION_WEIGHTS['core'] + 
-        trend_head * INFLATION_WEIGHTS['headline']
-    )
-    
-    # [关键修正]：保留通胀的绝对数值，用于"粘性通胀"判断
-    signals['Level_Inflation_Core'] = df[col_inf_core]
+    # 直接使用 'Macro_Inflation_Core' 和 'Macro_Inflation_Head'
+    if 'Macro_Inflation_Core' in df.columns and 'Macro_Inflation_Head' in df.columns:
+        inf_core_ma = df['Macro_Inflation_Core'].rolling(window=MACRO_TREND_WINDOW).mean()
+        inf_head_ma = df['Macro_Inflation_Head'].rolling(window=MACRO_TREND_WINDOW).mean()
+        
+        trend_core = df['Macro_Inflation_Core'] - inf_core_ma
+        trend_head = df['Macro_Inflation_Head'] - inf_head_ma
+        
+        signals['Trend_Inflation_Blended'] = (
+            trend_core * INFLATION_WEIGHTS['core'] + 
+            trend_head * INFLATION_WEIGHTS['headline']
+        )
+        
+        # [关键修正]：保留通胀的绝对数值，用于"粘性通胀"判断
+        signals['Level_Inflation_Core'] = df['Macro_Inflation_Core']
 
     return signals
 
 def calculate_market_veto_score(df: pd.DataFrame) -> pd.Series:
-    # ... (保持不变) ...
+    """
+    第二步：计算市场否决分数
+    直接读取原始信号列
+    """
     score = pd.Series(0, index=df.index)
-    col_curve = COLUMN_MAP['yield_curve']
-    col_risk = COLUMN_MAP['credit_risk']
-    col_vix = COLUMN_MAP['vix']
     
-    if col_curve in df.columns:
-        score -= (df[col_curve] < THRESHOLD_CURVE_INVERT).astype(int)
-    if col_risk in df.columns:
-        score -= (df[col_risk] > THRESHOLD_CREDIT_STRESS).astype(int)
-    if col_vix in df.columns:
-        score -= (df[col_vix] > THRESHOLD_VIX_PANIC).astype(int)
+    # 直接使用原始列名：'Signal_Curve_T10Y2Y'
+    if 'Signal_Curve_T10Y2Y' in df.columns:
+        # 倒挂 ( < 0 ) 扣分
+        score -= (df['Signal_Curve_T10Y2Y'] < THRESHOLD_CURVE_INVERT).astype(int)
+        
+    # 直接使用原始列名：'Signal_Risk_DBAA_Minus_DGS10'
+    if 'Signal_Risk_DBAA_Minus_DGS10' in df.columns:
+        # 信用利差过大 扣分
+        score -= (df['Signal_Risk_DBAA_Minus_DGS10'] > THRESHOLD_CREDIT_STRESS).astype(int)
+        
+    # 直接使用原始列名：'Signal_Vol_VIX'
+    if 'Signal_Vol_VIX' in df.columns:
+        # VIX 恐慌 扣分
+        score -= (df['Signal_Vol_VIX'] > THRESHOLD_VIX_PANIC).astype(int)
     
     return score
 
@@ -72,24 +81,22 @@ def determine_final_regime(
     
     # --- 1. 初始信号计算 ---
     # fillna(0) 处理冷启动
-    raw_growth_dir = np.sign(macro_signals['Trend_Growth']).fillna(0)
-    raw_inflation_dir = np.sign(macro_signals['Trend_Inflation_Blended']).fillna(0)
+    raw_growth_dir = np.sign(macro_signals.get('Trend_Growth', pd.Series(0, index=macro_signals.index))).fillna(0)
+    raw_inflation_dir = np.sign(macro_signals.get('Trend_Inflation_Blended', pd.Series(0, index=macro_signals.index))).fillna(0)
     
     # --- 2. 逻辑修正层 (Business Logic Layer) ---
     
     # 修正 A: 粘性通胀 (Sticky Inflation)
-    # 如果核心通胀绝对值 > 3.0%，强制认为通胀是向上的 (1)，哪怕短期趋势在回调。
-    # 逻辑：高通胀背景下，任何回调都是暂时的，防守通胀才是第一要务。
-    high_inflation_mask = (macro_signals['Level_Inflation_Core'] > THRESHOLD_INFLATION_STICKY)
+    level_inf_core = macro_signals.get('Level_Inflation_Core', pd.Series(0, index=macro_signals.index))
+    high_inflation_mask = (level_inf_core > THRESHOLD_INFLATION_STICKY)
+    
     # 只有当原始信号判断为负(Falling)时，才强制修正为正(Rising)
-    # 这样避免把本来就要Rising的信号搞乱
     sticky_fix_mask = (raw_inflation_dir < 0) & high_inflation_mask
     
     adj_inflation_dir = raw_inflation_dir.copy()
     adj_inflation_dir[sticky_fix_mask] = 1.0
     
     # 修正 B: 增长否决 (Growth Veto)
-    # 保持原有逻辑：市场不好，就别信增长
     adj_growth_dir = raw_growth_dir.copy()
     veto_mask = (raw_growth_dir > 0) & (market_score <= THRESHOLD_MARKET_PANIC)
     adj_growth_dir[veto_mask] = -1.0
@@ -101,8 +108,6 @@ def determine_final_regime(
     # --- 3. 映射 Regime ---
     def get_regime_label(g, i, score):
         # 修正 C: 危机熔断 (Crisis Circuit Breaker)
-        # 如果市场极度恐慌 (Score <= -2)，直接进入 Regime 4 (Deflation/Cash)
-        # 这是为了应对 2008年 GFC 这种股债双杀时刻
         if score <= THRESHOLD_MARKET_PANIC:
              return 4
              
@@ -119,9 +124,9 @@ def determine_final_regime(
     df_out['Regime'] = regimes
     
     # --- 4. 透传中间变量 (Debugging) ---
-    df_out['Trend_Growth'] = macro_signals['Trend_Growth']
-    df_out['Trend_Inflation_Blended'] = macro_signals['Trend_Inflation_Blended']
-    df_out['Level_Inflation_Core'] = macro_signals['Level_Inflation_Core'] # 方便查看是否触发Sticky
+    df_out['Trend_Growth'] = macro_signals.get('Trend_Growth', 0)
+    df_out['Trend_Inflation_Blended'] = macro_signals.get('Trend_Inflation_Blended', 0)
+    df_out['Level_Inflation_Core'] = level_inf_core
     
     df_out['Growth_Signal_Adj'] = adj_growth_dir
     df_out['Inflation_Signal'] = adj_inflation_dir
@@ -129,9 +134,25 @@ def determine_final_regime(
     
     return df_out
 
-# run_signal_pipeline 保持不变
 def run_signal_pipeline(merged_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    运行完整的信号生成管道
+    """
     macro_trends = calculate_macro_trends(merged_df)
     market_score = calculate_market_veto_score(merged_df)
     regime_df = determine_final_regime(macro_trends, market_score)
+    
+    # [关键修复]: 将原始的市场信号列透传到输出中
+    # 这样测试脚本或后续分析模块就能看到 VIX, Risk 等原始数值，而不仅仅是 Score
+    raw_cols_to_keep = [
+        'Signal_Vol_VIX', 
+        'Signal_Risk_DBAA_Minus_DGS10', 
+        'Signal_Curve_T10Y2Y'
+    ]
+    # 只合并存在的列，防止报错
+    existing_cols = [c for c in raw_cols_to_keep if c in merged_df.columns]
+    
+    if existing_cols:
+        regime_df = regime_df.join(merged_df[existing_cols], how='left')
+    
     return regime_df
