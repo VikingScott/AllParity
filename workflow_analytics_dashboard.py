@@ -6,7 +6,7 @@ import seaborn as sns
 from pathlib import Path
 
 # --- Configuration ---
-INPUT_FILE = Path("outputs/backtest_results.csv")
+INPUT_FILE = Path("outputs/backtest_results_risk_parity_v2.csv")
 OUTPUT_DIR = Path("outputs")
 
 # 定义颜色映射
