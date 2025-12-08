@@ -6,28 +6,26 @@ from pathlib import Path
 from scipy.stats import skew, kurtosis
 
 # ==========================================
-# 1. 配置与路径 (自动适配相对路径)
+# 1. 配置与路径
 # ==========================================
 CURRENT_DIR = Path(__file__).parent
 DATA_DIR = CURRENT_DIR.parent / "data"
 OUTPUTS_DIR = CURRENT_DIR.parent / "outputs"
 SAVE_DIR = CURRENT_DIR / "report_images"
 
-# 目标回测结果文件
-TARGET_RESULT_FILE = OUTPUTS_DIR / "backtest_results_retail_v3.csv"
+# 目标回测结果文件（⚠️ 你按实际文件名改）
+TARGET_RESULT_FILE = OUTPUTS_DIR / "backtest_results_leverage_v1.csv"
 ASSET_RET_FILE = DATA_DIR / "asset_returns.csv"
 
-# 确保保存目录存在
 if not SAVE_DIR.exists():
     SAVE_DIR.mkdir()
 
-# 绘图风格
 sns.set_theme(style="whitegrid", font_scale=1.1)
 plt.rcParams['figure.dpi'] = 150
 COLORS = sns.color_palette("deep")
 
 # ==========================================
-# 2. 数据加载与预处理
+# 2. 数据加载
 # ==========================================
 def load_data():
     print(f"🚀 Loading backtest results from: {TARGET_RESULT_FILE.name}...")
@@ -37,24 +35,16 @@ def load_data():
         return df, df_assets
     except FileNotFoundError as e:
         print(f"❌ Error: {e}")
-        print("请确保你在项目根目录下运行了 backtest_engine.py，并且文件夹结构正确。")
+        print("请确保你在项目根目录下运行了 backtest_engine_leverage，并且文件夹结构正确。")
         exit()
 
 # ==========================================
 # 2.1 构建更符合 Risk Parity 直觉的 Benchmark
 # ==========================================
 def build_rp_like_benchmarks(df_assets):
-    """
-    构建 RP-friendly benchmarks (只用已有 asset_returns.csv)：
-    1) Benchmark_RP_InvVol: 朴素 Risk Parity (Inv-Vol, Monthly)
-    2) Benchmark_60_40: 传统 60/40 (SPY + IEF/TLT)
-    3) Benchmark_EW_Core: 核心资产等权
-    """
-    # 核心候选池（按你已有数据自动适配）
     core_candidates = ['SPY', 'TLT', 'IEF', 'GLD', 'DBC', 'LQD', 'TIP', 'EFA', 'EEM', 'IWM']
     core = [c for c in core_candidates if c in df_assets.columns]
 
-    # RP-InvVol 优先用更“经典的多风险源核心”
     rp_core_pref = [c for c in ['SPY', 'TLT', 'IEF', 'GLD', 'DBC'] if c in df_assets.columns]
     rp_core = rp_core_pref if len(rp_core_pref) >= 3 else core[:5]
 
@@ -65,9 +55,7 @@ def build_rp_like_benchmarks(df_assets):
     rets_core = df_assets[rp_core].copy().fillna(0.0)
     out = pd.DataFrame(index=rets_core.index)
 
-    # -------------------------
-    # A) 60/40 Benchmark
-    # -------------------------
+    # A) 60/40
     if 'SPY' in df_assets.columns and ('IEF' in df_assets.columns or 'TLT' in df_assets.columns):
         bond = 'IEF' if 'IEF' in df_assets.columns else 'TLT'
         rets_6040 = df_assets[['SPY', bond]].copy().fillna(0.0)
@@ -75,21 +63,15 @@ def build_rp_like_benchmarks(df_assets):
         r_6040 = (rets_6040 * w_6040.values).sum(axis=1)
         out['Benchmark_60_40'] = (1 + r_6040).cumprod()
 
-    # -------------------------
-    # B) Equal Weight (EW) on rp_core
-    # -------------------------
+    # B) EW Core
     ew_w = np.repeat(1 / len(rp_core), len(rp_core))
     r_ew = (rets_core * ew_w).sum(axis=1)
     out['Benchmark_EW_Core'] = (1 + r_ew).cumprod()
 
-    # -------------------------
-    # C) Naive Risk Parity (Inv-Vol, Monthly)
-    # -------------------------
-    # 252 日滚动波动率
+    # C) Naive RP Inv-Vol Monthly
     vol = rets_core.rolling(252).std()
     inv_vol = 1 / vol.replace(0, np.nan)
 
-    # ✅ 关键修复：取“每个月真实存在的第一个交易日”
     month_starts = (
         rets_core.index.to_series()
         .groupby(rets_core.index.to_period('M'))
@@ -97,21 +79,17 @@ def build_rp_like_benchmarks(df_assets):
     )
     month_starts = pd.DatetimeIndex(month_starts.values)
 
-    # 用 reindex 避免严格索引报错
     w_m = inv_vol.reindex(month_starts).copy()
     w_m = w_m.div(w_m.sum(axis=1), axis=0).fillna(0.0)
 
-    # 扩展到日频
     w_daily = w_m.reindex(rets_core.index).ffill().fillna(0.0)
-
-    # 朴素 RP 日收益
     r_rp = (w_daily * rets_core).sum(axis=1)
     out['Benchmark_RP_InvVol'] = (1 + r_rp).cumprod()
 
     return out
 
 # ==========================================
-# 3. 核心统计指标 (Level 1 & 2)
+# 3. 核心统计指标
 # ==========================================
 def calc_advanced_stats(daily_ret):
     daily_ret = daily_ret.dropna()
@@ -146,15 +124,49 @@ def calc_advanced_stats(daily_ret):
     }
 
 # ==========================================
-# 4. 图表生成模块
+# 3.1 Leverage 专用诊断摘要
+# ==========================================
+def print_leverage_diagnostics(df):
+    print("\n[Leverage Diagnostics]")
+
+    # 1) gross exposure
+    if "Gross_Exposure" in df.columns:
+        ge = df["Gross_Exposure"].fillna(0.0)
+        avg_ge = ge.mean()
+        pct_lev = (ge > 1.01).mean()
+        print(f"  Avg Gross Exposure     : {avg_ge:.2f}x")
+        print(f"  % Days Leveraged>1.0x  : {pct_lev:.1%}")
+    else:
+        print("  Gross_Exposure not found (engine may not export it).")
+
+    # 2) borrow cost drag
+    if "Borrow_Cost_Daily" in df.columns:
+        bc = df["Borrow_Cost_Daily"].fillna(0.0)
+        ann_drag = bc.mean() * 252
+        print(f"  Financing Drag (ann)   : {ann_drag:.2%} (~{ann_drag*10000:.0f} bps)")
+    else:
+        print("  Borrow_Cost_Daily not found.")
+
+    # 3) regime 4 share
+    if "Regime" in df.columns:
+        r4_share = (df["Regime"] == 4).mean()
+        print(f"  Regime 4 share          : {r4_share:.1%}")
+
+    # 4) gross vs net sharpe
+    if "Portfolio_Gross_Ret" in df.columns and "Portfolio_Daily_Ret" in df.columns:
+        s_g = calc_advanced_stats(df["Portfolio_Gross_Ret"])
+        s_n = calc_advanced_stats(df["Portfolio_Daily_Ret"])
+        print(f"  Gross Sharpe            : {s_g['Sharpe']:.2f}")
+        print(f"  Net Sharpe              : {s_n['Sharpe']:.2f}")
+
+# ==========================================
+# 4. 图表模块
 # ==========================================
 
 def plot_1_summary_stats(df, stats):
     """图1: 净值曲线 + 核心指标文本卡片(居中) + RP-friendly Benchmarks(不同颜色)"""
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # --- 颜色映射（用你已有 COLORS）---
-    # 如果你喜欢固定语义色，也可以改成你自己偏好的顺序
     color_map = {
         'Strategy': COLORS[0],
         'Benchmark_RP_InvVol': COLORS[1],
@@ -163,15 +175,8 @@ def plot_1_summary_stats(df, stats):
         'Benchmark_SPY': COLORS[4] if len(COLORS) > 4 else 'black'
     }
 
-    # --- 策略净值 ---
-    ax.plot(
-        df.index, df['Equity_Curve'],
-        label='Strategy',
-        color=color_map['Strategy'],
-        lw=2.2
-    )
+    ax.plot(df.index, df['Equity_Curve'], label='Strategy (Net)', color=color_map['Strategy'], lw=2.2)
 
-    # --- RP-friendly benchmarks（不同颜色）---
     bench_order = [
         ('Benchmark_RP_InvVol', 'Naive RP (Inv-Vol)'),
         ('Benchmark_60_40', '60/40'),
@@ -179,60 +184,35 @@ def plot_1_summary_stats(df, stats):
     ]
     for col, label in bench_order:
         if col in df.columns:
-            ax.plot(
-                df.index, df[col],
-                label=label,
-                color=color_map.get(col, 'gray'),
-                alpha=0.85,
-                ls='--',
-                lw=1.6
-            )
+            ax.plot(df.index, df[col], label=label,
+                    color=color_map.get(col, 'gray'), alpha=0.85, ls='--', lw=1.6)
 
-    # --- 可选：保留 SPY legacy 对照（也用独立颜色）---
     if 'Benchmark_SPY' in df.columns:
-        ax.plot(
-            df.index, df['Benchmark_SPY'],
-            label='SPY (Legacy Bench)',
-            color=color_map.get('Benchmark_SPY', 'black'),
-            alpha=0.6,
-            ls=':',
-            lw=1.3
-        )
+        ax.plot(df.index, df['Benchmark_SPY'], label='SPY (Legacy Bench)',
+                color=color_map.get('Benchmark_SPY', 'black'), alpha=0.6, ls=':', lw=1.3)
 
-    # --- 轴与标题 ---
     ax.set_yscale('log')
     ax.set_title("Cumulative Return (Log Scale)", fontweight='bold')
     ax.legend()
 
-    # --- 指标文本卡片（居中）---
     text_str = '\n'.join([
         f"{k}: {v:.2%}" if k not in ['Sharpe', 'Sortino', 'Skew', 'Kurtosis']
         else f"{k}: {v:.2f}"
         for k, v in stats.items()
     ])
-
     props = dict(boxstyle='round', facecolor='white', alpha=0.75, edgecolor='gray')
 
-    # ✅ 居中放置
-    ax.text(
-        0.5, 0.8, text_str,
-        transform=ax.transAxes,
-        fontsize=11,
-        ha='center', va='center',
-        bbox=props
-    )
+    ax.text(0.5, 0.8, text_str, transform=ax.transAxes,
+            fontsize=11, ha='center', va='center', bbox=props)
 
     plt.tight_layout()
     plt.savefig(SAVE_DIR / "01_summary_performance.png")
     plt.close()
 
 def plot_1b_benchmark_stats(df):
-    """
-    图1b: 策略 + 各 Benchmark 的核心指标总览（单独一张图）
-    依赖 df 中已存在的 Equity_Curve 与 Benchmark_* 曲线
-    """
+    """图1b: 策略 + Benchmark 的核心指标总览（热力图）"""
     curves_map = {
-        "Strategy": "Equity_Curve",
+        "Strategy (Net)": "Equity_Curve",
         "Naive RP (Inv-Vol)": "Benchmark_RP_InvVol",
         "60/40": "Benchmark_60_40",
         "Equal Weight Core": "Benchmark_EW_Core",
@@ -246,73 +226,44 @@ def plot_1b_benchmark_stats(df):
             curve = df[col].dropna()
             if len(curve) < 5:
                 continue
-
-            # ✅ 从净值曲线推 daily return
             daily_ret = curve.pct_change().dropna()
-
-            # 用你已有的函数
             s = calc_advanced_stats(daily_ret)
-
-            # 只挑“最核心、最能横向对比的”
             stats_rows[name] = {
                 "CAGR": s["CAGR"],
                 "Vol": s["Vol"],
                 "Sharpe": s["Sharpe"],
                 "Sortino": s["Sortino"],
-                "MaxDD": df["Drawdown"].min() if name == "Strategy" else np.nan,
                 "Win Rate": s["Win Rate"],
                 "VaR (95%)": s["VaR (95%)"],
             }
+
+            # MaxDD for each curve
+            running_max = curve.cummax()
+            dd = (curve - running_max) / running_max
+            stats_rows[name]["MaxDD"] = dd.min()
 
     if not stats_rows:
         return
 
     stats_df = pd.DataFrame(stats_rows).T
 
-    # ✅ 对于非 Strategy 的 MaxDD：用各自曲线计算一个
-    # 这样更公平
-    for name, col in curves_map.items():
-        if name != "Strategy" and col in df.columns:
-            curve = df[col].dropna()
-            if len(curve) > 5:
-                running_max = curve.cummax()
-                dd = (curve - running_max) / running_max
-                stats_df.loc[name, "MaxDD"] = dd.min()
-
-    # 排序让视觉更舒服
-    preferred_order = ["Strategy", "Naive RP (Inv-Vol)", "60/40", "Equal Weight Core", "SPY (Legacy)"]
+    preferred_order = ["Strategy (Net)", "Naive RP (Inv-Vol)", "60/40", "Equal Weight Core", "SPY (Legacy)"]
     stats_df = stats_df.reindex([x for x in preferred_order if x in stats_df.index])
 
-    # ---- 画图：Heatmap ----
     fig, ax = plt.subplots(figsize=(10, 3.5 + 0.5 * len(stats_df)))
 
-    # 百分比列
     pct_cols = ["CAGR", "Vol", "MaxDD", "Win Rate", "VaR (95%)"]
-
-    # 格式化显示用的副本
     display_df = stats_df.copy()
     for c in pct_cols:
         if c in display_df.columns:
             display_df[c] = display_df[c] * 100
 
-    # Sharpe/Sortino 保留数值
-    # 用 annot=True 直接显示
-    sns.heatmap(
-        display_df,
-        annot=True,
-        fmt=".2f",
-        cmap="RdYlGn",
-        center=0,
-        cbar=False,
-        ax=ax
-    )
+    sns.heatmap(display_df, annot=True, fmt=".2f", cmap="RdYlGn", center=0, cbar=False, ax=ax)
 
-    # 轴标题美化
     ax.set_title("Strategy & Benchmark Statistics Overview", fontweight="bold")
     ax.set_xlabel("")
     ax.set_ylabel("")
 
-    # 手动把百分比列标题补上 %
     new_xticks = []
     for col in display_df.columns:
         if col in pct_cols:
@@ -325,8 +276,66 @@ def plot_1b_benchmark_stats(df):
     plt.savefig(SAVE_DIR / "01b_benchmark_stats.png")
     plt.close()
 
+def plot_1c_leverage_usage(df):
+    """图1c: 杠杆使用情况（Gross Exposure / Borrow Ratio）"""
+    if "Gross_Exposure" not in df.columns and "Borrow_Ratio" not in df.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    if "Gross_Exposure" in df.columns:
+        ax.plot(df.index, df["Gross_Exposure"], label="Gross Exposure", lw=1.6)
+
+    if "Borrow_Ratio" in df.columns:
+        ax.plot(df.index, df["Borrow_Ratio"], label="Borrow Ratio", lw=1.2, ls="--")
+
+    ax.axhline(1.0, color="black", lw=1, alpha=0.5)
+    ax.set_title("Leverage Usage Over Time", fontweight="bold")
+    ax.set_ylabel("x")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(SAVE_DIR / "01c_leverage_usage.png")
+    plt.close()
+
+def plot_1d_gross_vs_net(df):
+    """图1d: 毛收益 vs 净收益对照净值"""
+    if "Portfolio_Gross_Ret" not in df.columns or "Portfolio_Daily_Ret" not in df.columns:
+        return
+
+    gross_curve = (1 + df["Portfolio_Gross_Ret"].fillna(0.0)).cumprod()
+    net_curve = (1 + df["Portfolio_Daily_Ret"].fillna(0.0)).cumprod()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(gross_curve.index, gross_curve, label="Strategy Gross (before financing)", lw=2)
+    ax.plot(net_curve.index, net_curve, label="Strategy Net (after financing)", lw=2)
+
+    ax.set_yscale("log")
+    ax.set_title("Gross vs Net Equity Curve", fontweight="bold")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(SAVE_DIR / "01d_gross_vs_net.png")
+    plt.close()
+
+def plot_1e_cum_financing_cost(df):
+    """图1e: 累计融资成本曲线"""
+    if "Borrow_Cost_Daily" not in df.columns:
+        return
+
+    # 累计成本（近似）
+    cum_cost = df["Borrow_Cost_Daily"].fillna(0.0).cumsum()
+
+    fig, ax = plt.subplots(figsize=(12, 4.5))
+    ax.plot(cum_cost.index, cum_cost, lw=1.8)
+    ax.set_title("Cumulative Financing Cost (Sum of Daily Costs)", fontweight="bold")
+    ax.set_ylabel("Cumulative cost (approx)")
+
+    plt.tight_layout()
+    plt.savefig(SAVE_DIR / "01e_cum_financing_cost.png")
+    plt.close()
+
 def plot_2_drawdown_analysis(df):
-    """图2: 回撤深度 + 滚动波动率"""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
     dd = df['Drawdown']
@@ -345,14 +354,11 @@ def plot_2_drawdown_analysis(df):
     plt.close()
 
 def plot_3_rolling_metrics(df):
-    """图3: 滚动 Sharpe (稳定性检查)"""
     window = 252
     r = df['Portfolio_Daily_Ret']
 
     roll_ret = r.rolling(window).mean() * 252
     roll_std = r.rolling(window).std() * np.sqrt(252)
-
-    # 防止分母为 0 导致爆炸
     roll_sharpe = roll_ret / roll_std.replace(0, np.nan)
 
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -368,7 +374,6 @@ def plot_3_rolling_metrics(df):
     plt.close()
 
 def plot_4_regime_analysis(df):
-    """图4: 分体制表现"""
     if 'Regime' not in df.columns:
         return
 
@@ -402,15 +407,13 @@ def plot_4_regime_analysis(df):
     plt.close()
 
 def plot_5_turnover_cost(df):
-    """图5: 换手率与成本敏感性"""
     w_cols = [c for c in df.columns if c.startswith('W_')]
     if not w_cols:
         return
 
     weights = df[w_cols].copy()
-
     daily_turnover = weights.diff().abs().sum(axis=1)
-    ann_turnover = daily_turnover.mean() * 252 * 0.5  # 单边年化
+    ann_turnover = daily_turnover.mean() * 252 * 0.5
 
     costs_bps = [0, 5, 10, 20]
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -421,7 +424,6 @@ def plot_5_turnover_cost(df):
         cost_impact = daily_turnover.fillna(0.0) * (cost / 10000)
         net_ret = original_ret - cost_impact
         net_curve = (1 + net_ret).cumprod()
-
         ax.plot(net_curve.index, net_curve, label=f"Cost {cost}bps (Ann TO: {ann_turnover:.1f}x)")
 
     ax.set_yscale('log')
@@ -433,7 +435,6 @@ def plot_5_turnover_cost(df):
     plt.close()
 
 def plot_6_attribution(df, df_assets):
-    """图6: 收益归因"""
     w_cols = [c for c in df.columns if c.startswith('W_')]
     valid_assets = [c.replace('W_', '') for c in w_cols]
     valid_assets = [a for a in valid_assets if a in df_assets.columns]
@@ -447,7 +448,6 @@ def plot_6_attribution(df, df_assets):
 
     contrib = w_aligned.values * r_aligned.values
     contrib_df = pd.DataFrame(contrib, index=common_idx, columns=valid_assets)
-
     cum_contrib = contrib_df.sum().sort_values(ascending=False)
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -461,7 +461,6 @@ def plot_6_attribution(df, df_assets):
     plt.close()
 
 def plot_7_yearly_heatmap(df):
-    """图7: 年度月度热力图"""
     daily = df['Portfolio_Daily_Ret'].fillna(0.0)
     monthly = daily.resample('M').apply(lambda x: (1 + x).prod() - 1)
 
@@ -485,12 +484,11 @@ def plot_7_yearly_heatmap(df):
 # 5. 主程序
 # ==========================================
 def main():
-    print(">>> 📊 Starting Advanced Analytics Suite...")
+    print(">>> 📊 Starting Advanced Analytics Suite (Leverage Upgrade)...")
 
-    # 1. 加载数据
     df, df_assets = load_data()
 
-    # 2. 构建 RP-friendly benchmarks 并合并
+    # 1) RP-friendly benchmarks
     bench_df = build_rp_like_benchmarks(df_assets)
     if not bench_df.empty:
         common_idx = df.index.intersection(bench_df.index)
@@ -498,22 +496,34 @@ def main():
         bench_df = bench_df.loc[common_idx].copy()
         df = df.join(bench_df, how='left')
 
-    # 3. 计算策略统计
+    # 2) 策略统计（净收益）
     stats = calc_advanced_stats(df['Portfolio_Daily_Ret'])
 
-    print("\n[Key Statistics]")
+    print("\n[Key Statistics - Strategy Net]")
     for k, v in stats.items():
         print(f"  {k:<12} : {v:.4f}")
 
-    # 4. 生成图表
-    print("\n>>> 🎨 Generating Plots in 'analysis_pro/report_images/'...")
+    # 3) Leverage 诊断打印
+    print_leverage_diagnostics(df)
+
+    # 4) 生成图表
+    print("\n>>> 🎨 Generating Plots...")
 
     plot_1_summary_stats(df, stats)
-    print("  ✅ 01 Summary & Stats (with RP-friendly Benchmarks)")
+    print("  ✅ 01 Summary & Stats")
 
-    # ✅ 新增：单独输出 benchmark stats 总览图
     plot_1b_benchmark_stats(df)
     print("  ✅ 01b Benchmark Stats Overview")
+
+    # ✅ 新增三件套：杠杆使用/毛净对照/累计融资成本
+    plot_1c_leverage_usage(df)
+    print("  ✅ 01c Leverage Usage")
+
+    plot_1d_gross_vs_net(df)
+    print("  ✅ 01d Gross vs Net")
+
+    plot_1e_cum_financing_cost(df)
+    print("  ✅ 01e Cumulative Financing Cost")
 
     plot_2_drawdown_analysis(df)
     print("  ✅ 02 Drawdown & Vol Structure")

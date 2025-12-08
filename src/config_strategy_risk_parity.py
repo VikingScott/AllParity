@@ -16,7 +16,7 @@ TREND_WINDOW = 200    # 趋势过滤的均线窗口 (日)
 # ===========================
 # 现金资产不参与风险平价计算，而是作为"剩余填充"(Plug)
 # 风险资产参与 (Budget / Volatility) 的计算
-ASSETS_CASH = ['SGOV', 'BIL'] 
+ASSETS_CASH = ['SGOV'] 
 ASSETS_RISKY = ['SPY', 'EFA', 'EEM', 'IWM',  # Equities
                 'TLT', 'IEF', 'LQD', 'TIP',  # Bonds
                 'DBC', 'GLD']                # Commodities

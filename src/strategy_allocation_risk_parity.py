@@ -30,7 +30,7 @@ def calculate_analytics(price_df: pd.DataFrame):
     # Mask = 1 if Price >= MA, else 0
     # 现金资产 (SGOV/BIL) 默认不受趋势限制，Mask 恒为 1
     trend_mask = (price_df >= ma_df).astype(float)
-    for cash_asset in ['SGOV', 'BIL']:
+    for cash_asset in ['SGOV']:
         if cash_asset in trend_mask.columns:
             trend_mask[cash_asset] = 1.0
             

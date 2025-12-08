@@ -34,7 +34,7 @@ RISK_TIER_1 = (2.5, 2.2)   # 压力 -> 扣 1 分
 RISK_TIER_2 = (4.0, 3.7)   # 危机 -> 额外扣 1 分
 
 # 4. 警报分层阈值
-THRESHOLD_MARKET_ALERT = -1.0
+THRESHOLD_MARKET_ALERT = -2.5
 
 
 # ==========================================
@@ -178,7 +178,7 @@ def determine_final_regime(
         # 熔断机制：如果分数极低 (<= -2)，强制 Deflation (4)
         if s <= THRESHOLD_MARKET_PANIC: 
             return 4
-        return REGIME_CODE_MAP.get((int(g), int(i)), 4)
+        return REGIME_CODE_MAP.get((int(g), int(i)), 1)
 
     df_out['Regime'] = [
         get_regime(g, i, s) 

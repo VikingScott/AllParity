@@ -25,7 +25,7 @@ THRESHOLD_CURVE_INVERT = 0.0     # 10Y-2Y < 0 = Inverted
 THRESHOLD_GROWTH_ROBUST = 1.5
 
 THRESHOLD_INFLATION_STICKY = 3.0 # Core CPI > 3% = Force Inflation Regime
-THRESHOLD_MARKET_PANIC = -2      # Score <= -2 = Force Crash Regime
+THRESHOLD_MARKET_PANIC = -4      # Score <= -2 = Force Crash Regime
 
 # 5. Regime Map
 # (Growth_Dir, Inflation_Dir) -> Regime Code
