@@ -79,7 +79,7 @@ WEIGHTS_REGIME_4_MACRO = {
     'TLT': 0.50,  # 进攻型长债
     'IEF': 0.30,  # 防守型中债
     'GLD': 0.10,  # 货币对冲
-    'LQD': 0.00,  # 投资级债
+    'LQD': 0.10,  # 投资级债
     # --- Underweight ---
     'SPY': 0.00,
     'EFA': 0.00,
@@ -87,7 +87,7 @@ WEIGHTS_REGIME_4_MACRO = {
     'IWM': 0.00,
     'DBC': 0.00,
     'TIP': 0.00,
-    'SGOV': 0.10
+    'SGOV': 0.00
 }
 
 # Regime 4 (Panic): Market Circuit Breaker

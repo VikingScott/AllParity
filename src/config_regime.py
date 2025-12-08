@@ -19,6 +19,11 @@ THRESHOLD_CREDIT_STRESS = 2.5    # Spread > 2.5 = Tight Credit
 THRESHOLD_CURVE_INVERT = 0.0     # 10Y-2Y < 0 = Inverted
 
 # 4. Logic Overrides
+
+# [新增] 强劲增长阈值 (Robust Growth Floor)
+# 如果 Growth 绝对值高于此值，即使趋势向下，也视为 Growth+ (避免高位回落误判)
+THRESHOLD_GROWTH_ROBUST = 1.5
+
 THRESHOLD_INFLATION_STICKY = 3.0 # Core CPI > 3% = Force Inflation Regime
 THRESHOLD_MARKET_PANIC = -2      # Score <= -2 = Force Crash Regime
 

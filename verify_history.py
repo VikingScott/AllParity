@@ -4,7 +4,7 @@ import pandas as pd
 
 # Import your modules
 from src.data_loader import get_merged_market_state
-from src.macro_regime_signal_generator_v2 import run_signal_pipeline
+from src.macro_regime_signal_generator import run_signal_pipeline
 
 def verify_and_visualize():
     print("1. Loading Data...")
