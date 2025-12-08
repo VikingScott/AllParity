@@ -49,8 +49,9 @@ RP_CLASSIC_5 = [a for a in ["SPY", "TLT", "IEF", "GLD", "DBC"] if a in RP_CORE_A
 #    ✅ 禁止杠杆缩放
 # ------------------------------------------------------------
 REGIME_4_WEIGHTS: Dict[str, float] = {
-    "SGOV": 0.70,
+    "SGOV": 0.30,
     "GLD": 0.30,
+    "TLT": 0.40
 }
 
 # ------------------------------------------------------------
@@ -99,12 +100,19 @@ LEVERAGE_FLOOR = 0.0
 # 这里先给 A)
 
 USE_FIXED_FINANCING_RATE = True
-FINANCING_RATE_ANN = 0.00  # 8% 年化，先保守设个常数
+FINANCING_RATE_ANN = 0.04  # 8% 年化，先保守设个常数
 
 # 如果未来你要切换成数据序列（比如用 FRED TB3MS / DGS3MO），
 # 在 allocation/engine 中读取这个开关即可：
 FINANCING_RATE_SERIES_COL = None  # e.g. "RF_3M"
 
+
+REGIME_LEVERAGE_CAPS = {
+    1: 2.0, # Goldilocks (可全杠杆)
+    2: 2.0, # Reflation
+    3: 1.5, # Stagflation (开始保守)
+    4: 1.25 # Deflation/Crisis (极度保守，最大借入 25%)
+}
 
 # ------------------------------------------------------------
 # 6. 输出/调试保护

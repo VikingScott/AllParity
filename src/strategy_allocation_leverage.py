@@ -23,6 +23,7 @@ from src.config_strategy_levearge import (
     LEVERAGE_FLOOR,
     ENABLE_GUARDRAILS,
     GROSS_EXPOSURE_HARD_CAP,
+    REGIME_LEVERAGE_CAPS
 )
 
 # -----------------------------
@@ -249,6 +250,20 @@ def get_target_weights_leverage_v1(
     # -----------------------------
     lev = _compute_leverage_multiplier(vol_base_ann)
 
+    # -----------------------------
+    # 4) Leverage scaling (single source of truth)
+    # -----------------------------
+    lev = _compute_leverage_multiplier(vol_base_ann)
+
+    # 4b) [关键修改] 应用 Regime-Conditional Cap
+    # 目的：阻止在R4等低Alpha/低Vol体制下过度杠杆化
+    if REGIME_LEVERAGE_CAPS is not None and last_regime in REGIME_LEVERAGE_CAPS:
+        # 获取当前体制的上限，如果未设置则回退到整体 LEVERAGE_CAP
+        regime_cap = REGIME_LEVERAGE_CAPS.get(last_regime, LEVERAGE_CAP)
+        
+        # 强制应用上限：最终杠杆乘数是原始计算值和体制上限中的最小值
+        lev = min(lev, regime_cap)
+    
     w = base_w * lev
 
     # -----------------------------

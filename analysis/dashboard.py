@@ -14,7 +14,7 @@ OUTPUTS_DIR = CURRENT_DIR.parent / "outputs"
 SAVE_DIR = CURRENT_DIR / "report_images"
 
 # 目标回测结果文件（⚠️ 你按实际文件名改）
-TARGET_RESULT_FILE = OUTPUTS_DIR / "backtest_results_leverage_v1.csv"
+TARGET_RESULT_FILE = OUTPUTS_DIR / "backtest_results_leverage_4pct_improved_weight.csv"
 ASSET_RET_FILE = DATA_DIR / "asset_returns.csv"
 
 if not SAVE_DIR.exists():

@@ -39,7 +39,7 @@ BUDGETS_REGIME_1 = {
     'SGOV': 0.0, # 满仓进攻
     # --- Risk Budgets (Relative) ---
     'SPY': 4.0, 
-    'EFA': 2.0, 
+    'EFA': 1.5, 
     'EEM': 1.0, 
     'IWM': 1.0,
     'LQD': 2.0, # 信用债也算进攻
@@ -60,7 +60,7 @@ BUDGETS_REGIME_2 = {
     'GLD': 0.5,
     'IWM': 1.0,
     # --- Zero Budget ---
-    'TLT': 0.0, 'IEF': 0.0, 'LQD': 0.0, 'EFA': 0.0
+    'TLT': 0.0, 'IEF': 0.0, 'LQD': 0.0, 'EFA': 0.5
 }
 
 # Regime 3: Stagflation (Growth-, Inflation+)
@@ -71,7 +71,7 @@ BUDGETS_REGIME_3 = {
     'GLD': 6.0, # 黄金是主力
     'DBC': 4.0,
     'TIP': 3.0,
-    'IEF': 0.0,
+    'IEF': 0.5,
     'LQD': 0.0,
     # --- Zero Budget ---
     'SPY': 0.0, 'EFA': 0.0, 'EEM': 0.0, 'IWM': 0.0, 'TLT': 0.0
@@ -84,7 +84,7 @@ BUDGETS_REGIME_4_MACRO = {
     # --- Risk Budgets ---
     'TLT': 8.0, # 风险全给长债
     'IEF': 2.0,
-    'GLD': 1.0, # 少量对冲货币贬值
+    'GLD': 1.5, # 少量对冲货币贬值
     'LQD':0.0,
     # --- Zero Budget ---
     'SPY': 0.0, 'EFA': 0.0, 'EEM': 0.0, 'IWM': 0.0, 'DBC': 0.0, 'TIP': 0.0
