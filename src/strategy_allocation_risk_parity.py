@@ -22,7 +22,8 @@ def calculate_analytics(price_df: pd.DataFrame):
     # 最小观测值设为窗口的一半，防止初期全是 NaN
     vol_df = returns_df.rolling(window=VOL_WINDOW, min_periods=VOL_WINDOW//2).std() * np.sqrt(252)
     # 防御性处理：波动率不能为 0 (防止除以零)
-    vol_df = vol_df.replace(0, np.nan).fillna(method='bfill').fillna(0.01) 
+    vol_df = vol_df.replace(0, np.nan)
+    vol_df = vol_df.fillna(method='ffill', limit=VOL_WINDOW//2).fillna(0.01)
 
     # 3. Trend Mask (Price > MA)
     ma_df = price_df.rolling(window=TREND_WINDOW, min_periods=TREND_WINDOW//2).mean()
