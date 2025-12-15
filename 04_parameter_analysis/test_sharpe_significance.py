@@ -1,212 +1,242 @@
-# 05_component_rules/test_sharpe_significance.py
-# (或者你的 04_parameter_analysis/test_sharpe_significance.py)
+# 04_parameter_analysis/test_sharpe_significance.py
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import stats
 import os
 import sys
 
-# 路径魔法
+# ==========================================
+# 1. Path Configuration
+# ==========================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-TARGET_DIR_03 = os.path.join(PROJECT_ROOT, '03_1_strategy_construction')
-if TARGET_DIR_03 not in sys.path:
-    sys.path.append(TARGET_DIR_03)
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'processed')
+PLOT_DIR = os.path.join(PROJECT_ROOT, 'outputs', 'plots', '05_component_rules') # Storing in rules/validation folder
 
-PLOT_DIR = os.path.join(PROJECT_ROOT, 'outputs', 'plots', '05_component_rules')
-if not os.path.exists(PLOT_DIR): os.makedirs(PLOT_DIR)
+if not os.path.exists(PLOT_DIR):
+    os.makedirs(PLOT_DIR)
 
-def block_bootstrap_p_value(series_a, series_b, n_sims=5000, block_size=12):
+# ==========================================
+# 2. Statistical Engines
+# ==========================================
+
+def calculate_newey_west_alpha(y_series, x_series, lags=12):
     """
-    使用 Circular Block Bootstrap 计算 Sharpe 差异的 P-Value
-    保留时间序列的自相关性。
-    H0: Sharpe(A) <= Sharpe(B)
+    Calculates Alpha and its t-statistic using Newey-West HAC standard errors
+    using pure NumPy (no statsmodels dependency).
+    Model: y = alpha + beta * x + epsilon
     """
-    # 1. 对齐数据
-    df = pd.DataFrame({'A': series_a, 'B': series_b}).dropna()
+    # 1. Prepare Data
+    df = pd.DataFrame({'Y': y_series, 'X': x_series}).dropna()
+    nobs = len(df)
+    
+    Y = df['Y'].values
+    # Add constant (intercept) column to X
+    X = np.column_stack((np.ones(nobs), df['X'].values))
+    
+    # 2. OLS Estimation: Beta = (X'X)^-1 X'Y
+    XTX = np.dot(X.T, X)
+    XTX_inv = np.linalg.inv(XTX)
+    beta = np.dot(np.dot(XTX_inv, X.T), Y)
+    
+    alpha = beta[0] # Intercept is the first coefficient
+    
+    # 3. Calculate Residuals
+    residuals = Y - np.dot(X, beta)
+    
+    # 4. Newey-West Covariance Matrix Calculation
+    # The Variance-Covariance matrix of beta is given by:
+    # V = (X'X)^-1 * S * (X'X)^-1
+    # Where S is the HAC estimator of the outer product of gradients
+    
+    # S_0 (Variance part)
+    # X.T * (residuals^2) @ X
+    # Using broadcasting for efficiency: (X * residuals[:, None]).T @ (X * residuals[:, None])
+    Z = X * residuals[:, np.newaxis]
+    S = np.dot(Z.T, Z)
+    
+    # Add Lag terms (Covariance part)
+    for l in range(1, lags + 1):
+        # Bartlett Kernel Weight
+        weight = 1 - l / (lags + 1)
+        
+        # Calculate Gamma_l = sum(Z_t * Z_{t-l}.T)
+        # Z[l:] corresponds to t (from l to T-1)
+        # Z[:-l] corresponds to t-l (from 0 to T-1-l)
+        Z_t = Z[l:]
+        Z_tm1 = Z[:-l]
+        
+        Gamma_l = np.dot(Z_t.T, Z_tm1)
+        
+        # Add to S: weight * (Gamma_l + Gamma_l.T)
+        S += weight * (Gamma_l + Gamma_l.T)
+        
+    # Calculate Variance-Covariance Matrix of Coefficients
+    V_beta = np.dot(np.dot(XTX_inv, S), XTX_inv)
+    
+    # 5. Extract Statistics
+    se_alpha = np.sqrt(V_beta[0, 0])
+    t_stat = alpha / (se_alpha + 1e-16)
+    
+    # P-value (two-tailed t-test)
+    df_resid = nobs - X.shape[1]
+    p_value = 2 * (1 - stats.t.cdf(np.abs(t_stat), df=df_resid))
+    
+    return alpha, t_stat, p_value, None
+
+def block_bootstrap_stats(series_test, series_ctrl, n_sims=5000, block_size=12, ci_level=0.90):
+    """
+    Performs Circular Block Bootstrap to test H0: Sharpe(Test) <= Sharpe(Ctrl).
+    Returns P-Value, Confidence Intervals, and the full distribution.
+    """
+    # 1. Align & Prep Data
+    df = pd.DataFrame({'T': series_test, 'C': series_ctrl}).dropna()
     n = len(df)
+    data_vals = df.values
     
-    # 计算实际 Sharpe 差
-    # 加上 1e-8 防止分母为0
-    sharpe_a = df['A'].mean() / df['A'].std() * np.sqrt(12)
-    sharpe_b = df['B'].mean() / df['B'].std() * np.sqrt(12)
-    diff_actual = sharpe_a - sharpe_b
+    # Actual Sharpe Difference
+    sharpe_t = df['T'].mean() / df['T'].std() * np.sqrt(12)
+    sharpe_c = df['C'].mean() / df['C'].std() * np.sqrt(12)
+    diff_actual = sharpe_t - sharpe_c
     
-    # 2. Block Bootstrap
-    # 我们将数据视为环形 (Circular)，以便处理边界
-    # 将 DataFrame 转为 numpy 数组加速
-    data_vals = df.values # (n, 2)
-    
-    # 预先生成随机起始点
-    # 我们需要构建 n_sims 个长度为 n 的序列
-    # 每次抽 n/block_size 个块
+    # 2. Bootstrap Loop
     n_blocks = int(np.ceil(n / block_size))
-    
     diffs_sim = []
     
+    # Fixed seed for reproducibility
     np.random.seed(42)
     
-    print(f"      Running {n_sims} simulations (Block Size={block_size})...")
-    
     for _ in range(n_sims):
-        # 随机选择块的起始索引
+        # Random starting indices for blocks
         start_indices = np.random.randint(0, n, n_blocks)
         
-        # 构建重采样索引
+        # Construct indices (Circular)
         indices = []
         for start in start_indices:
-            # 生成一个块的索引 [start, start+1, ..., start+block-1]
-            # 使用取模运算实现环形数据
             block_idxs = np.arange(start, start + block_size) % n
             indices.extend(block_idxs)
-            
-        # 截取前 n 个 (因为 n_blocks * block_size 可能 > n)
         indices = indices[:n]
         
-        # 抽取样本
-        samp = data_vals[indices] # (n, 2)
-        samp_a = samp[:, 0]
-        samp_b = samp[:, 1]
+        # Sample
+        samp = data_vals[indices]
         
-        # 计算该样本的 Sharpe 差
-        s_a = samp_a.mean() / (samp_a.std() + 1e-8) * np.sqrt(12)
-        s_b = samp_b.mean() / (samp_b.std() + 1e-8) * np.sqrt(12)
-        
-        diffs_sim.append(s_a - s_b)
+        # Calculate Sharpe Diff for this sample
+        # Add small epsilon to std to avoid division by zero in weird samples
+        s_t = samp[:, 0].mean() / (samp[:, 0].std() + 1e-8) * np.sqrt(12)
+        s_c = samp[:, 1].mean() / (samp[:, 1].std() + 1e-8) * np.sqrt(12)
+        diffs_sim.append(s_t - s_c)
         
     diffs_sim = np.array(diffs_sim)
     
-    # 3. 计算单侧 P-Value
-    # P(diff <= 0)
+    # 3. Statistics
+    # H0: Diff <= 0. P-value is fraction of sims where Diff <= 0.
     p_value = (diffs_sim <= 0).mean()
     
-    return diff_actual, p_value, diffs_sim
-
-def run_significance_test():
-    print("🚀 [Significance] Starting Institutional-Grade Bootstrap Test...")
+    # Confidence Interval (e.g., 90% CI is 5th to 95th percentile)
+    lower_pct = (1 - ci_level) / 2 * 100
+    upper_pct = (1 + ci_level) / 2 * 100
+    ci_lower = np.percentile(diffs_sim, lower_pct)
+    ci_upper = np.percentile(diffs_sim, upper_pct)
     
-    # 读取数据
+    return diff_actual, p_value, ci_lower, ci_upper, diffs_sim
+
+# ==========================================
+# 3. Main Test Runner
+# ==========================================
+
+def run_hypothesis_1_test():
+    print("🚀 [H1 Test] Running Risk Parity vs 60/40 Significance Analysis...")
+    
+    # 1. Load Data
     res_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'strategy_results.csv')
     if not os.path.exists(res_path):
-        print("❌ Strategy results missing.")
+        print(f"❌ File not found: {res_path}")
         return
     df = pd.read_csv(res_path, index_col=0, parse_dates=True)
     
-    # ---------------------------------------------------------
-    # Test 1: Academic RP vs SP500 (Paper Core)
-    # ---------------------------------------------------------
-    print("\n   [Test 1] Academic RP (Target Equity Vol) vs SP500")
-    # 注意：这里要用 Academic 版本（无 Cap，对标 Equity Vol）
-    # 如果你之前的 main_runner 是 "Dual-Track" 版本，你应该有 RP_Academic_XR
-    # 且它对标的是 SP500 Vol。
+    # Define Target Columns for H1
+    # We compare Net Retail RP vs Bench 60/40
+    col_test = 'RP_Retail_XR'
+    col_ctrl = 'Bench_6040_XR'
     
-    col_acad = 'RP_Academic_XR'
-    col_mkt = 'Bench_SP500_XR'
-    
-    if col_acad in df.columns and col_mkt in df.columns:
-        diff_1, p_1, dist_1 = block_bootstrap_p_value(df[col_acad], df[col_mkt])
-        print(f"      Actual Diff: {diff_1:.4f} | P-Value: {p_1:.4f}")
-        res_1 = "SIGNIFICANT" if p_1 < 0.05 else "NOT SIGNIFICANT"
-        print(f"      Result: {res_1}")
-    else:
-        print("      ⚠️ Columns missing for Test 1.")
-        diff_1, p_1, dist_1 = 0, 1, []
+    if col_test not in df.columns or col_ctrl not in df.columns:
+        print("❌ Required columns missing.")
+        return
 
     # ---------------------------------------------------------
-    # Test 2: Retail RP vs 60/40 (Extension / Policy)
+    # Part A: Primary Block Bootstrap (Block=12)
     # ---------------------------------------------------------
-    print("\n   [Test 2] Retail RP (Target 60/40 Vol) vs 60/40")
+    print("\n🔹 Primary Test: Block Bootstrap (Block=12m, N=5000)")
+    diff, p, ci_low, ci_high, dist = block_bootstrap_stats(
+        df[col_test], df[col_ctrl], n_sims=5000, block_size=12
+    )
     
-    col_retail = 'RP_Retail_XR'
-    col_6040 = 'Bench_6040_XR'
+    print(f"   Actual Sharpe Diff: {diff:.4f}")
+    print(f"   P-Value (H0<=0):    {p:.4f}")
+    print(f"   90% Conf. Interval: [{ci_low:.4f}, {ci_high:.4f}]")
     
-    if col_retail in df.columns and col_6040 in df.columns:
-        diff_2, p_2, dist_2 = block_bootstrap_p_value(df[col_retail], df[col_6040])
-        print(f"      Actual Diff: {diff_2:.4f} | P-Value: {p_2:.4f}")
-        res_2 = "SIGNIFICANT" if p_2 < 0.05 else "NOT SIGNIFICANT"
-        print(f"      Result: {res_2}")
-    else:
-        print("      ⚠️ Columns missing for Test 2.")
-        diff_2, p_2, dist_2 = 0, 1, []
+    significance = "SIGNIFICANT" if p < 0.05 else ("MARGINAL" if p < 0.10 else "INSIGNIFICANT")
+    print(f"   Conclusion:         {significance}")
 
     # ---------------------------------------------------------
-    # 画图 (双子图)
+    # Part B: Robustness - Block Size Sensitivity
     # ---------------------------------------------------------
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    print("\n🔹 Robustness 1: Block Length Sensitivity")
+    block_sizes = [6, 12, 24, 36, 48]
+    sensitivity_res = []
     
-    # Plot 1
-    if len(dist_1) > 0:
-        axes[0].hist(dist_1, bins=50, color='#1f77b4', alpha=0.7, density=True)
-        axes[0].axvline(0, color='red', ls='--', lw=2, label='Zero')
-        axes[0].axvline(diff_1, color='gold', lw=3, label=f'Actual ({diff_1:.2f})')
-        axes[0].set_title(f'Paper Core: RP Academic vs SP500\nP-Value = {p_1:.4f} ({res_1})')
-        axes[0].legend()
-    
-    # Plot 2
-    if len(dist_2) > 0:
-        axes[1].hist(dist_2, bins=50, color='#2ca02c', alpha=0.7, density=True)
-        axes[1].axvline(0, color='red', ls='--', lw=2, label='Zero')
-        axes[1].axvline(diff_2, color='gold', lw=3, label=f'Actual ({diff_2:.2f})')
-        axes[1].set_title(f'Extension: RP Retail vs 60/40\nP-Value = {p_2:.4f} ({res_2})')
-        axes[1].legend()
+    for b in block_sizes:
+        _, p_val, _, _, _ = block_bootstrap_stats(
+            df[col_test], df[col_ctrl], n_sims=2000, block_size=b
+        )
+        sensitivity_res.append({'Block Size': b, 'P-Value': p_val})
         
-    plt.tight_layout()
-    save_path = os.path.join(PLOT_DIR, 'significance_block_bootstrap.png')
+    df_sens = pd.DataFrame(sensitivity_res)
+    print(df_sens.to_string(index=False))
+
+    # ---------------------------------------------------------
+    # Part C: Robustness - Newey-West Alpha
+    # ---------------------------------------------------------
+    print("\n🔹 Robustness 2: Newey-West Alpha (Regression vs 60/40)")
+    alpha, t_stat, p_reg, _ = calculate_newey_west_alpha(df[col_test], df[col_ctrl])
+    
+    # Alpha is monthly here, usually we report annualized alpha for context
+    alpha_ann = alpha * 12
+    print(f"   Annualized Alpha:   {alpha_ann:.2%}")
+    print(f"   NW t-statistic:     {t_stat:.4f}")
+    print(f"   P-Value (2-sided):  {p_reg:.4f}")
+    
+    reg_sig = "SIGNIFICANT" if p_reg < 0.05 else "INSIGNIFICANT"
+    print(f"   Conclusion:         {reg_sig}")
+
+    # ---------------------------------------------------------
+    # Part D: Visualization (Publication Ready)
+    # ---------------------------------------------------------
+    plt.figure(figsize=(10, 6))
+    
+    # Histogram of Bootstrap Distribution
+    plt.hist(dist, bins=50, color='#1f77b4', alpha=0.6, density=True, label='Bootstrap Dist. (H0)')
+    
+    # Actual Difference Line
+    plt.axvline(diff, color='gold', lw=3, label=f'Actual Diff (+{diff:.2f})')
+    
+    # Zero Line
+    plt.axvline(0, color='red', ls='--', lw=1.5, label='Zero (H0 Boundary)')
+    
+    # CI Area
+    plt.axvspan(ci_low, ci_high, color='gray', alpha=0.1, label='90% CI')
+    
+    plt.title(f'Hypothesis 1 Test: RP (Retail) vs 60/40\nP-Value={p:.4f} | 90% CI: [{ci_low:.2f}, {ci_high:.2f}]')
+    plt.xlabel('Sharpe Ratio Difference (RP - 60/40)')
+    plt.ylabel('Probability Density')
+    plt.legend(loc='upper left')
+    plt.grid(True, alpha=0.2)
+    
+    save_path = os.path.join(PLOT_DIR, 'significance_h1_bootstrap.png')
     plt.savefig(save_path)
-    print(f"\n✅ Dual Significance Plot Saved: {save_path}")
-
-
-    # ---------------------------------------------------------
-    # Test 3: The "Golden Era" Analysis (1993 - 2020)
-    # ---------------------------------------------------------
-    print("\n   [Test 3] Regime Check: Retail RP vs 60/40 (Pre-2021)")
-    print("      Hypothesis: RP worked perfectly before the Inflation Shock.")
-    
-    # 切片数据：截止到 2020 年底
-    df_pre_2021 = df.loc[:'2020-12-31']
-    
-    if col_retail in df_pre_2021.columns:
-        diff_3, p_3, dist_3 = block_bootstrap_p_value(
-            df_pre_2021[col_retail], 
-            df_pre_2021[col_6040]
-        )
-        print(f"      Time Range: {df_pre_2021.index[0].date()} -> {df_pre_2021.index[-1].date()}")
-        print(f"      Actual Diff: {diff_3:.4f} | P-Value: {p_3:.4f}")
-        res_3 = "SIGNIFICANT" if p_3 < 0.05 else "NOT SIGNIFICANT"
-        print(f"      Result: {res_3}")
-        
-        # 补画一张图
-        plt.figure(figsize=(8, 5))
-        plt.hist(dist_3, bins=50, color='gold', alpha=0.7, density=True, label='Bootstrap Dist.')
-        plt.axvline(0, color='red', ls='--', lw=2, label='Zero')
-        plt.axvline(diff_3, color='purple', lw=3, label=f'Actual ({diff_3:.2f})')
-        plt.title(f'Golden Era (1993-2020): RP Retail vs 60/40\nP-Value = {p_3:.4f} ({res_3})')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.savefig(os.path.join(PLOT_DIR, 'significance_golden_era.png'))
-        print(f"✅ Golden Era Plot Saved.")
-
-
-    # ---------------------------------------------------------
-    # Test 4: The "Theoretical Alpha" Check (Academic vs 60/40, Pre-2021)
-    # ---------------------------------------------------------
-    print("\n   [Test 4] Theoretical Check: Academic RP vs 60/40 (Pre-2021)")
-    print("      Hypothesis: Without frictions, RP should win significantly.")
-    
-    # 使用 Academic 版本 (无 Spread, 10x Cap, Target Equity Vol)
-    # 注意：Academic 对标的是 Equity Vol (15%)，60/40 是 (9%)
-    # 直接比 Sharpe 是公平的，因为 Sharpe 已经除以了波动率
-    col_acad = 'RP_Academic_XR' 
-    
-    if col_acad in df_pre_2021.columns:
-        diff_4, p_4, dist_4 = block_bootstrap_p_value(
-            df_pre_2021[col_acad], 
-            df_pre_2021[col_6040]
-        )
-        print(f"      Actual Diff: {diff_4:.4f} | P-Value: {p_4:.4f}")
-        res_4 = "SIGNIFICANT" if p_4 < 0.05 else "NOT SIGNIFICANT"
-        print(f"      Result: {res_4}")
+    print(f"\n✅ Plot Saved: {save_path}")
 
 if __name__ == "__main__":
-    run_significance_test()
+    run_hypothesis_1_test()
